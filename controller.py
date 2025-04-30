@@ -1,35 +1,118 @@
-#!/usr/bin/env python
-""" A first template for a PID controller """
+#!/usr/bin/env python3
+"""
+ROS Node for Line Following Controller with PID Control copied from Github 4/30 1240pm
+"""
 
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import Twist, PointStamped
+from std_msgs.msg import Float64
+from rclpy.time import Time
 
-class PID():
-    """ Computes proportional, derivative, and integral terms for a PID controller """
-    def __init__(self, gain_kp=1.0, gain_kd=1.0, gain_ki=1.0):
-        """Initializes gains and internal state (previous error and integral error)"""
-        self.gain_kp = gain_kp
-        self.gain_kd = gain_kd
-        self.gain_ki = gain_ki
+class PID:
+    """PID controller implementation."""
+    def __init__(self, kp=0.0, kd=0.0, ki=0.0):
+        """Initialize PID controller with gains."""
+        self.kp = float(kp)
+        self.kd = float(kd)
+        self.ki = float(ki)
+        self.prev_error = 0.0
+        self.integral = 0.0
 
-        self.error_signal_previous = None
-        self.error_signal_integral = 0
+    def update(self, error, dt):
+        """Calculate all PID terms at once."""
+        # Proportional term
 
-    def proportional(self, error_signal):
-        """ Compute proportional term (with gain) """
-        control_p = -self.gain_kp * error_signal
-        return control_p
+        p_term = -self.kp * error
 
-    def integral(self, error_signal, time_delay):
-        """ Compute integral term (with gain) """
-        self.error_signal_integral += time_delay * error_signal
-        control_i = -self.gain_ki * self.error_signal_integral
-        return control_i
+        # Derivative term
+        d_term = 0.0
+        if dt > 0:
+            d_term = -self.kd * (error - self.prev_error) / dt
+            self.prev_error = error
 
-    def derivative(self, error_signal, time_delay):
-        """ Compute derivative term (with gain) """
-        if self.error_signal_previous is None:
-            control_d = 0.0
-        else:
-            control_d = -self.gain_kd * (error_signal - self.error_signal_previous) / time_delay
-        self.error_signal_previous = error_signal
-        return control_d
-        
+        # Integral term
+        self.integral += error * dt
+        i_term =-self.ki * self.integral
+
+        return p_term + d_term + i_term
+
+class LineController(Node):
+    """PID controller for line following."""
+
+    def __init__(self):
+        """Initialize node with parameters and publishers."""
+        super().__init__('line_controller')
+
+        # Initialize parameters
+        self.lin_speed = 0.0  # Set to small non-zero value for testing
+        self.gain_proportional = 0.01  # Start with P term only
+        self.gain_derivative = 0.0
+        self.gain_integral = 0.0
+        self.image_width = 360
+
+        self.pid = PID(
+            kp=self.gain_proportional,
+            kd=self.gain_derivative,
+            ki=self.gain_integral)
+        self.msg_previous = None
+        self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.error_pub = self.create_publisher(Float64, '/control_error', 10)
+        self.centroid_sub = self.create_subscription(
+            PointStamped,
+            '/image/centroid',
+            self.centroid_callback,
+            10)
+
+        self.get_logger().info('Line controller node initialized')
+
+    def centroid_callback(self, msg):
+        """Process centroid messages and compute control output."""
+        try:
+            error_signal = float(msg.point.x - (self.image_width / 2))
+            #error_signal = float(msg.point.x - 180)
+            error_msg = Float64()
+            error_msg.data = error_signal
+            self.error_pub.publish(error_msg)
+            time_delay = 0.1  # Start with fixed small value for testing
+            if self.msg_previous is not None:
+                time_delay = self.stamp_difference(msg.header.stamp, self.msg_previous.header.stamp)
+            msg_twist = Twist()
+            msg_twist.linear.x = float(self.lin_speed)
+            # Calculate PID output using single update call
+            pid_output = self.pid.update(error_signal, time_delay)
+            msg_twist.angular.z = float(pid_output)
+            # Publish
+            self.cmd_vel_pub.publish(msg_twist)
+            self.msg_previous = msg
+
+            self.get_logger().info(
+                f"Error: {error_signal:.1f}, Output: {pid_output:.2f}",
+                throttle_duration_sec=0.5)
+
+        except Exception as e:
+            self.get_logger().error(f"Error in callback: {str(e)}")
+
+    @staticmethod
+    def stamp_difference(stamp2, stamp1):
+        """Calculate time difference between two stamps in seconds."""
+        time1 = Time.from_msg(stamp1)
+        time2 = Time.from_msg(stamp2)
+        duration = time2 - time1
+        return duration.nanoseconds / 1e9
+
+def main(args=None):
+    """Main function to initialize and run the node."""
+    rclpy.init(args=args)
+    controller = LineController()
+
+    try:
+        rclpy.spin(controller)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        controller.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
