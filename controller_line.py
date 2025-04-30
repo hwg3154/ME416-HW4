@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ROS Node for Line Following Controller with PID Control
+ROS Node for Line Following Controller with PID Control copied from Github 4/30 1240pm
 """
 
 import rclpy
@@ -22,33 +22,34 @@ class PID:
     def update(self, error, dt):
         """Calculate all PID terms at once."""
         # Proportional term
-        p_term = self.kp * error
-        
+
+        p_term = -self.kp * error
+
         # Derivative term
         d_term = 0.0
         if dt > 0:
-            d_term = self.kd * (error - self.prev_error) / dt
+            d_term = -self.kd * (error - self.prev_error) / dt
             self.prev_error = error
-        
+
         # Integral term
         self.integral += error * dt
-        i_term = self.ki * self.integral
-        
+        i_term =-self.ki * self.integral
+
         return p_term + d_term + i_term
 
 class LineController(Node):
     """PID controller for line following."""
-    
+
     def __init__(self):
         """Initialize node with parameters and publishers."""
         super().__init__('line_controller')
-        
+
         # Initialize parameters
-        self.lin_speed = 0.1  # Set to small non-zero value for testing
-        self.gain_proportional = 0.5  # Start with P term only
+        self.lin_speed = 0.0  # Set to small non-zero value for testing
+        self.gain_proportional = 0.01  # Start with P term only
         self.gain_derivative = 0.0
         self.gain_integral = 0.0
-        self.image_width = 640
+        self.image_width = 360
 
         self.pid = PID(
             kp=self.gain_proportional,
@@ -62,13 +63,14 @@ class LineController(Node):
             '/image/centroid',
             self.centroid_callback,
             10)
-        
+
         self.get_logger().info('Line controller node initialized')
 
     def centroid_callback(self, msg):
         """Process centroid messages and compute control output."""
         try:
             error_signal = float(msg.point.x - (self.image_width / 2))
+            #error_signal = float(msg.point.x - 180)
             error_msg = Float64()
             error_msg.data = error_signal
             self.error_pub.publish(error_msg)
@@ -83,11 +85,11 @@ class LineController(Node):
             # Publish
             self.cmd_vel_pub.publish(msg_twist)
             self.msg_previous = msg
-            
+
             self.get_logger().info(
                 f"Error: {error_signal:.1f}, Output: {pid_output:.2f}",
                 throttle_duration_sec=0.5)
-            
+
         except Exception as e:
             self.get_logger().error(f"Error in callback: {str(e)}")
 
@@ -103,7 +105,7 @@ def main(args=None):
     """Main function to initialize and run the node."""
     rclpy.init(args=args)
     controller = LineController()
-    
+
     try:
         rclpy.spin(controller)
     except KeyboardInterrupt:
